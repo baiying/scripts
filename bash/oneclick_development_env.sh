@@ -8,8 +8,8 @@ set -o pipefail
 # 配置
 ########################################
 
-REDIS_PASSWORD="By^108508@2025"
-POSTGRES_PASSWORD="By^108508@2025"
+REDIS_PASSWORD="xxxx"
+POSTGRES_PASSWORD="xxxx"
 
 NODE_VERSION="22.11.0"
 PY_VERSION="3.12.7"
