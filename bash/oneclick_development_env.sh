@@ -37,7 +37,7 @@ PYENV_ROOT="/usr/local/pyenv"
 ########################################
 # Redis 配置
 ########################################
-REDIS_PASSWORD="1q2w3e4r"
+REDIS_PASSWORD="xxxxxx"
 REDIS_DATA_DIR="/var/lib/redis"
 REDIS_PORT="6379"
 REDIS_BIND="0.0.0.0"
@@ -46,7 +46,7 @@ REDIS_MAXMEMORY="512mb"  # 2C4G配置下从256mb调整为512mb
 ########################################
 # PostgreSQL 配置
 ########################################
-POSTGRES_PASSWORD="1q2w3e4r"
+POSTGRES_PASSWORD="xxxxxx"
 POSTGRES_VERSION="17"
 POSTGRES_MAX_CONNECTIONS="150"
 
@@ -332,6 +332,7 @@ EOF
 
 ########################################
 # PostgreSQL 安装模块
+# PostgreSQL is for local dev/testing only, not for load testing
 ########################################
 install_postgresql() {
   if [ "$INSTALL_POSTGRESQL" != "true" ]; then
@@ -348,6 +349,18 @@ install_postgresql() {
 
   PG_CONF="/var/lib/pgsql/${POSTGRES_VERSION}/data/postgresql.conf"
   PG_HBA="/var/lib/pgsql/${POSTGRES_VERSION}/data/pg_hba.conf"
+
+  # 依据当前服务器配置优化PostgreSQL配置
+  # ===== Memory tuning for 2C4G dev server =====
+  shared_buffers = 256MB
+  work_mem = 4MB
+  maintenance_work_mem = 64MB
+  effective_cache_size = 1GB
+  # ===== Connection control =====
+  max_connections = 50
+  # ===== Autovacuum control =====
+  autovacuum_max_workers = 2
+  autovacuum_work_mem = 64MB
 
   # 配置PostgreSQL网络访问
   sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" $PG_CONF
