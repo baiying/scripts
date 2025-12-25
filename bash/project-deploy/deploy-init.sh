@@ -13,17 +13,17 @@ WEB_ROOT="/var/www/aigc.pub"
 LOG_ROOT="/var/log/deploy"
 
 SSH_DIR="$WWW_HOME/.ssh"
-DEPLOY_KEY="$SSH_DIR/aigc_deploy_key"
+DEPLOY_KEY="$SSH_DIR/gnuapi_id_ed25519"
 SSH_CONFIG="$SSH_DIR/config"
 SYSTEMD_DIR="/etc/systemd/system"
 
 MAX_BACKUP=3
 
-### ===== 项目配置（你只需要改这里）=====
+### ===== 项目配置 =====
 PROJECTS=(
-  "api.aigc.pub git@github-api-aigc:baiying/api.aigc.pub.git python"
-  "workflow.aigc.pub git@github-workflow-aigc:baiying/workflow.aigc.pub.git python"
-  "www.aigc.pub git@github-www-aigc:baiying/www.aigc.pub.git nextjs"
+  "api.aigc.pub git@github-gnuapi:baiying/api.aigc.pub.git python"
+  "workflow.aigc.pub git@github-gnuapi:baiying/workflow.aigc.pub.git python"
+  "www.aigc.pub git@github-gnuapi:baiying/www.aigc.pub.git nextjs"
 )
 
 echo "🚀 Bootstrap deploy environment..."
@@ -38,42 +38,35 @@ id "$WWW_USER" &>/dev/null || {
 mkdir -p "$DEPLOY_ROOT" "$COMMON_DIR" "$PROJECT_DIR" "$WEB_ROOT" "$LOG_ROOT"
 
 chown -R "$WWW_USER:$WWW_USER" "$DEPLOY_ROOT" "$WEB_ROOT" "$LOG_ROOT"
-
 chmod 755 "$DEPLOY_ROOT" "$WEB_ROOT"
 chmod 750 "$LOG_ROOT"
 
-### ===== 2. SSH 目录 & deploy key =====
+### ===== 2. SSH 目录 & gnuapi key =====
 mkdir -p "$SSH_DIR"
 chmod 700 "$SSH_DIR"
 chown -R "$WWW_USER:$WWW_USER" "$SSH_DIR"
 
 if [ ! -f "$DEPLOY_KEY" ]; then
-  echo "🔑 Generating deploy key..."
-  sudo -u "$WWW_USER" ssh-keygen -t ed25519 -f "$DEPLOY_KEY" -N "" -C "www-deploy-aigc.pub"
+  echo "🔑 Generating gnuapi SSH key..."
+  sudo -u "$WWW_USER" ssh-keygen -t ed25519 -f "$DEPLOY_KEY" -N "" -C "gnuapi@deploy"
 else
-  echo "🔑 Deploy key already exists"
+  echo "🔑 SSH key already exists"
 fi
 
 chmod 600 "$DEPLOY_KEY"
 chmod 644 "$DEPLOY_KEY.pub"
 
-### ===== 3. SSH config（GitHub Host Alias）=====
+### ===== 3. SSH config =====
 echo "🛠️ Writing SSH config..."
-> "$SSH_CONFIG"
 
-for p in "${PROJECTS[@]}"; do
-  read NAME REPO TYPE <<< "$p"
-  HOST_ALIAS=$(echo "$REPO" | cut -d'@' -f2 | cut -d':' -f1)
-
-  cat >> "$SSH_CONFIG" <<EOF
-Host $HOST_ALIAS
+cat > "$SSH_CONFIG" <<EOF
+Host github-gnuapi
   HostName github.com
   User git
   IdentityFile $DEPLOY_KEY
   IdentitiesOnly yes
-
+  StrictHostKeyChecking accept-new
 EOF
-done
 
 chmod 600 "$SSH_CONFIG"
 chown "$WWW_USER:$WWW_USER" "$SSH_CONFIG"
@@ -120,21 +113,13 @@ EOF
 chmod 750 "$COMMON_DIR/deploy-lib.sh"
 chown "$WWW_USER:$WWW_USER" "$COMMON_DIR/deploy-lib.sh"
 
-### ===== 创建项目 systemd service =====
-
+### ===== systemd services（python）=====
 for p in "${PROJECTS[@]}"; do
   read NAME REPO TYPE <<< "$p"
-
   [ "$TYPE" != "python" ] && continue
 
   SERVICE_FILE="$SYSTEMD_DIR/$NAME.service"
-
-  if [ -f "$SERVICE_FILE" ]; then
-    echo "ℹ️ Service $NAME already exists"
-    continue
-  fi
-
-  echo "🧩 Creating systemd service: $NAME"
+  [ -f "$SERVICE_FILE" ] && continue
 
   cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -146,7 +131,6 @@ User=www
 WorkingDirectory=$WEB_ROOT/$NAME
 Environment=PYENV_ROOT=/usr/local/pyenv
 Environment=PATH=/usr/local/pyenv/shims:/home/www/.local/bin:/usr/bin
-
 ExecStart=$WEB_ROOT/$NAME/run.sh
 Restart=always
 RestartSec=3
@@ -159,7 +143,8 @@ EOF
   systemctl enable "$NAME"
 done
 
-### ===== 5. 项目 deploy.sh 生成 =====
+### ===== 5. deploy.sh =====
+
 for p in "${PROJECTS[@]}"; do
   read NAME REPO TYPE <<< "$p"
   APP_DEPLOY_DIR="$PROJECT_DIR/$NAME"
@@ -179,30 +164,26 @@ TMP_DIR="$WEB_ROOT/.$APP.tmp"
 REPO="$REPO"
 LOG_FILE="$LOG_ROOT/$APP.log"
 
-exec >> "$LOG_FILE" 2>&1
+exec >> "\$LOG_FILE" 2>&1
 
 acquire_lock
-log "🚀 Deploy start: $APP"
-
+log "🚀 Deploy start: \$APP"
 trap rollback ERR
 
-rm -rf "$TMP_DIR"
-git clone "$REPO" "$TMP_DIR"
+rm -rf "\$TMP_DIR"
+git clone "\$REPO" "\$TMP_DIR"
 
-cd "$TMP_DIR"
+cd "\$TMP_DIR"
 uv sync --frozen
 
-[ -d "$APP_DIR" ] && mv "$APP_DIR" "${APP_DIR}.bak.$(date +%s)"
-mv "$TMP_DIR" "$APP_DIR"
+[ -d "\$APP_DIR" ] && mv "\$APP_DIR" "\${APP_DIR}.bak.\$(date +%s)"
+mv "\$TMP_DIR" "\$APP_DIR"
 
-systemctl restart "$APP"
-systemctl is-active --quiet "$APP" || {
-  log "❌ Service $APP failed to start"
-  exit 1
-}
+systemctl restart "\$APP"
+systemctl is-active --quiet "\$APP"
 
 cleanup_old_backup
-log "✅ Deploy success: $APP"
+log "✅ Deploy success: \$APP"
 EOF
   else
     cat > "$APP_DEPLOY_DIR/deploy.sh" <<EOF
@@ -211,15 +192,13 @@ set -e
 source $COMMON_DIR/deploy-lib.sh
 
 APP="$NAME"
-LOG_FILE="$LOG_ROOT/deploy/$APP.log"
+LOG_FILE="$LOG_ROOT/$APP.log"
 
-exec >> "$LOG_FILE" 2>&1
+exec >> "\$LOG_FILE" 2>&1
 
 acquire_lock
-log "♻️ Reload Next.js app: $APP"
-
-pm2 reload "$APP"
-
+log "♻️ Reload Next.js app: \$APP"
+pm2 reload "\$APP"
 log "✅ Reload completed"
 EOF
   fi
@@ -228,10 +207,9 @@ EOF
   chown "$WWW_USER:$WWW_USER" "$APP_DEPLOY_DIR/deploy.sh"
 done
 
-### ===== 6. 完成提示 =====
 echo ""
 echo "✅ Deploy environment initialized"
 echo ""
-echo "📌 Add this deploy key to ALL GitHub repos (Read-only):"
+echo "📌 Add this SSH public key to GitHub user: gnuapi (Authentication Key)"
 echo ""
 cat "$DEPLOY_KEY.pub"
