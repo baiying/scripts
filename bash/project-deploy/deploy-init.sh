@@ -13,7 +13,7 @@ WEB_ROOT="/var/www/aigc.pub"
 LOG_ROOT="/var/log/deploy"
 
 SSH_DIR="$WWW_HOME/.ssh"
-DEPLOY_KEY="$SSH_DIR/gnuapi_id_ed25519"
+DEPLOY_KEY="$SSH_DIR/aigc_deploy_key"
 SSH_CONFIG="$SSH_DIR/config"
 SYSTEMD_DIR="/etc/systemd/system"
 
@@ -101,8 +101,8 @@ rollback() {
   log "⚠️ Rollback triggered"
   LAST=$(ls -dt "$APP_DIR".bak.* 2>/dev/null | head -n 1)
   if [ -d "$LAST" ]; then
-    rm -rf "$APP_DIR"
-    mv "$LAST" "$APP_DIR"
+    sudo rm -rf "$APP_DIR"
+    sudo mv "$LAST" "$APP_DIR"
     log "✅ Rollback completed"
   else
     log "❌ No backup found"
@@ -159,10 +159,15 @@ set -e
 source $COMMON_DIR/deploy-lib.sh
 
 APP="$NAME"
-APP_DIR="$WEB_ROOT/$APP"
-TMP_DIR="$WEB_ROOT/.$APP.tmp"
+APP_DIR="$WEB_ROOT/$NAME"
+TMP_DIR="$WEB_ROOT/.$NAME.tmp"
 REPO="$REPO"
-LOG_FILE="$LOG_ROOT/$APP.log"
+LOG_FILE="$LOG_ROOT/$NAME.log"
+
+[ -z "\$APP" ] && {
+  echo "❌ APP is empty, abort"
+  exit 1
+}
 
 exec >> "\$LOG_FILE" 2>&1
 
@@ -170,17 +175,30 @@ acquire_lock
 log "🚀 Deploy start: \$APP"
 trap rollback ERR
 
-rm -rf "\$TMP_DIR"
+cleanup_tmp() {
+  rm -rf "\$TMP_DIR"
+}
+trap cleanup_tmp EXIT
+
+ssh -T github-gnuapi 2>&1 | grep -q "successfully authenticated" || {
+  log "❌ GitHub SSH authentication failed"
+  exit 1
+}
+
 git clone "\$REPO" "\$TMP_DIR"
 
 cd "\$TMP_DIR"
+export PATH="/usr/local/pyenv/shims:/home/www/.local/bin:\$PATH"
 uv sync --frozen
 
 [ -d "\$APP_DIR" ] && mv "\$APP_DIR" "\${APP_DIR}.bak.\$(date +%s)"
 mv "\$TMP_DIR" "\$APP_DIR"
 
-systemctl restart "\$APP"
-systemctl is-active --quiet "\$APP"
+sudo systemctl restart "\$APP"
+sudo systemctl is-active --quiet "\$APP" || {
+  log "❌ Service \$APP failed to start"
+  exit 1
+}
 
 cleanup_old_backup
 log "✅ Deploy success: \$APP"
@@ -192,14 +210,18 @@ set -e
 source $COMMON_DIR/deploy-lib.sh
 
 APP="$NAME"
-LOG_FILE="$LOG_ROOT/$APP.log"
+LOG_FILE="$LOG_ROOT/$NAME.log"
 
 exec >> "\$LOG_FILE" 2>&1
 
 acquire_lock
 log "♻️ Reload Next.js app: \$APP"
-pm2 reload "\$APP"
-log "✅ Reload completed"
+export PM2_HOME="/home/www/.pm2"
+pm2 reload "\$APP" || {
+  log "❌ PM2 reload failed"
+  exit 1
+}
+
 EOF
   fi
 
