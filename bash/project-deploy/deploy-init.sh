@@ -156,6 +156,15 @@ for p in "${PROJECTS[@]}"; do
     cat > "$APP_DEPLOY_DIR/deploy.sh" <<EOF
 #!/bin/bash
 set -e
+
+export PATH="/usr/local/pyenv/shims:/home/www/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+echo "PATH=$PATH"
+which uv || echo "❌ uv not found"
+which git || echo "❌ git not found"
+which sudo || echo "❌ sudo not found"
+which systemctl || echo "❌ systemctl not found"
+
 source $COMMON_DIR/deploy-lib.sh
 
 APP="$NAME"
@@ -180,11 +189,6 @@ cleanup_tmp() {
 }
 trap cleanup_tmp EXIT
 
-ssh -T github-gnuapi 2>&1 | grep -q "successfully authenticated" || {
-  log "❌ GitHub SSH authentication failed"
-  exit 1
-}
-
 git clone "\$REPO" "\$TMP_DIR"
 
 cd "\$TMP_DIR"
@@ -193,6 +197,8 @@ uv sync --frozen
 
 [ -d "\$APP_DIR" ] && mv "\$APP_DIR" "\${APP_DIR}.bak.\$(date +%s)"
 mv "\$TMP_DIR" "\$APP_DIR"
+
+ln -sfn /var/www/aigc.pub/env/\$APP.env "\$APP_DIR/.env"
 
 sudo systemctl restart "\$APP"
 sudo systemctl is-active --quiet "\$APP" || {
@@ -207,20 +213,47 @@ EOF
     cat > "$APP_DEPLOY_DIR/deploy.sh" <<EOF
 #!/bin/bash
 set -e
+
+export PATH="/home/www/.local/bin:/usr/local/bin:/usr/bin:/bin"
+export PM2_HOME="/home/www/.pm2"
+
 source $COMMON_DIR/deploy-lib.sh
 
 APP="$NAME"
+APP_DIR="$WEB_ROOT/$NAME/current"
 LOG_FILE="$LOG_ROOT/$NAME.log"
 
 exec >> "\$LOG_FILE" 2>&1
 
 acquire_lock
-log "♻️ Reload Next.js app: \$APP"
-export PM2_HOME="/home/www/.pm2"
-pm2 reload "\$APP" || {
-  log "❌ PM2 reload failed"
-  exit 1
+log "Deploy \$APP"
+
+# ---- 基础校验 ----
+command -v pm2 >/dev/null 2>&1 || {
+  log "❌ pm2 not found in PATH: $PATH"
+  exit 127
 }
+
+
+
+if pm2 describe "\$APP" >/dev/null 2>&1; then
+  log "♻️ PM2 app exists, reload"
+  pm2 reload "\$APP" --update-env --no-daemon --silent || {
+    log "❌ PM2 reload failed"
+    pm2 status || true
+    exit 1
+  }
+else
+  log "🆕 PM2 app not found, start first time"
+  if [ -f ecosystem.config.js ]; then
+    pm2 start ecosystem.config.js --only "\$APP"
+  else
+    pm2 start npm --name "\$APP" -- start
+  fi
+fi
+
+pm2 save
+log "✅ Deploy completed"
 
 EOF
   fi
@@ -239,5 +272,4 @@ echo ""
 echo "📌 Replace www account sudoers config with this: "
 echo ""
 echo "www ALL=(root) NOPASSWD: /usr/bin/pm2, /usr/bin/systemctl reload nginx, /usr/bin/systemctl restart nginx, /usr/bin/systemctl restart redis, /usr/bin/systemctl restart *, /usr/bin/systemctl is-active *"
-echo ""
 echo ""
